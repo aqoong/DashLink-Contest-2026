@@ -4,7 +4,7 @@
 
 현재 버전은 `0.3.8-mvp`입니다. 차량에 설치하는 Android Automotive OS 앱으로, **정차·앱 전경 상태의 Pleos 에뮬레이터 시연**을 제공합니다. 사고와 통신 상태를 모의 입력해 응답 대기부터 SOS 요청까지 체험할 수 있습니다. 119 신고와 보호자 위치 전달은 앱 내부 모의 결과이며 실제 발신·외부 전송은 없습니다.
 
-[Release APK](apk/wonwoohan_DashLink_release.apk) · [시연 영상·화면](submission/README.md) · [검증 결과](docs/validation.md) · [제3자 라이선스](THIRD_PARTY_NOTICES.md)
+[Release APK](apk/한원우_DashLink_release.apk) · [시연 영상·화면](submission/README.md) · [검증 결과](docs/validation.md) · [제3자 라이선스](THIRD_PARTY_NOTICES.md)
 
 ![DashLink 0.3.8 홈 화면](submission/screenshots/borderless/01-home.png)
 
@@ -18,10 +18,10 @@
 ## 바로 실행하기
 
 1. 아래 시험 환경의 Pleos AVD를 **Cold boot**로 시작하고 정차 상태로 둡니다. VHAL 시험에는 Quick boot를 사용하지 않습니다.
-2. `apk/wonwoohan_DashLink_release.apk`를 내려받아 설치합니다. `adb devices`에서 대상 번호를 확인한 뒤 `<SERIAL>`을 바꿉니다.
+2. `apk/한원우_DashLink_release.apk`를 내려받아 설치합니다. `adb devices`에서 대상 번호를 확인한 뒤 `<SERIAL>`을 바꿉니다.
 
 ```sh
-adb -s <SERIAL> install -r apk/wonwoohan_DashLink_release.apk
+adb -s <SERIAL> install -r apk/한원우_DashLink_release.apk
 adb -s <SERIAL> shell am start -W -n ai.pleos.contest.dashlink/.MainActivity
 ```
 

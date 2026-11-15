@@ -4,7 +4,7 @@
 
 ## APK와 화면
 
-- [서명된 release APK](../apk/wonwoohan_DashLink_release.apk)
+- [서명된 release APK](../apk/한원우_DashLink_release.apk)
 - [현재 홈 화면 — 0.3.8](screenshots/borderless/01-home.png)
 - [출력 방식 설정 — 0.3.5](screenshots/settings/02-output-settings.png)
 - [차량 정보 상세 — 0.3.6](screenshots/sections/03-detail.png)
