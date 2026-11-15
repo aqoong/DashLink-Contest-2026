@@ -2,7 +2,7 @@
 
 **운전자가 응답하기 어렵고 통신도 끊긴 사고 상황에서, 차량 조명으로 마지막 도움 요청을 전하는 Pleos Connect 앱 시제품입니다.**
 
-현재 버전은 `0.3.9-mvp`입니다. 차량에 설치하는 Android Automotive OS 앱으로, **정차·앱 전경 상태의 Pleos 에뮬레이터 시연**을 제공합니다. 사고와 통신 상태를 모의 입력해 응답 대기부터 SOS 요청까지 체험할 수 있습니다. 119 신고와 보호자 위치 전달은 앱 내부 모의 결과이며 실제 발신·외부 전송은 없습니다.
+현재 버전은 `0.3.9-mvp`입니다. 차량에 설치하는 Android Automotive OS 앱으로, **정차·앱 전경 상태의 Pleos 에뮬레이터 시연**을 제공합니다. 사고와 통신 상태를 모의 입력해 응답 대기부터 SOS 요청까지 체험할 수 있습니다. 119 신고와 긴급연락처로 위치를 전달하는 기능은 앱 내부 모의 결과이며 실제 발신·외부 전송은 없습니다.
 
 [Release APK](apk/한원우_DashLink_release.apk) · [시연 영상·화면](submission/README.md) · [검증 결과](docs/validation.md) · [제3자 라이선스](THIRD_PARTY_NOTICES.md)
 
@@ -67,6 +67,16 @@ JDK 17, Android SDK Platform 34, Build Tools 36.0.0, Platform Tools를 준비합
 ```
 
 debug APK는 `app/build/outputs/apk/debug/app-debug.apk`에 생성됩니다. 서명키와 서명 설정은 포함하지 않으므로 새로 빌드한 release는 unsigned APK입니다. 바로 설치할 서명된 제출본은 위의 `apk/` 경로를 사용합니다. 제3자 구성요소는 [라이선스 문서](THIRD_PARTY_NOTICES.md)를 확인합니다.
+
+## 연결 휴대전화를 통한 통화 검토
+
+향후 통화 경로는 `DashLink → 승인된 시스템 전화 기능 → Bluetooth HFP → 연결 휴대전화`로 검토합니다. AAOS는 HFP로 연결된 휴대전화의 통화를 지원하지만, Pleos에서 제3자 앱이 사용할 수 있는 API·권한은 별도 확인이 필요합니다. [AOSP HFP·긴급통화](https://source.android.com/docs/automotive/ivi_connectivity) · [Pleos 전화 API 제한 안내](https://document.pleos.ai/docs/pleos-only/vehicle-app-planning-guide/platform-api-architecture)
+
+- **긴급연락처 일반 통화:** 시스템 전화 화면에서 사용자가 발신하는 경로와 `CALL_PHONE` 권한으로 발신을 요청하는 경로를 구분해 검토합니다. 전화 화면만 여는 방식은 운전자 행동불능 상황의 자동신고를 해결하지 못합니다.
+- **119 자동발신:** `CALL_PHONE`만으로 보장하지 않습니다. 기본·시스템 다이얼러 등 허용된 긴급통화 경로와 OEM의 HFP 긴급통화 설정을 확인해야 합니다. 기존 차량 긴급통화 체계를 우선하고 현대차가 승인한 연계 범위에서 검토합니다. [Android 발신 API](https://developer.android.com/reference/android/telecom/TelecomManager#placeCall(android.net.Uri,%20android.os.Bundle))
+- 차량 인터넷과 휴대전화 음성통화 가능 여부는 별도입니다. Bluetooth 연결 자체가 이동통신을 대신하지 않으며, 발신 요청·상대 응답·사고 위치 전달·119 접수 확인도 구분해야 합니다.
+
+현재 APK의 연락 결과는 계속 모의 처리입니다. 실제 휴대전화 통화는 시험하지 않았으며, Pleos 에뮬레이터2.1.0의 Bluetooth 동글 연동은 종료되었습니다. 이 내용은 실차 Bluetooth 통화의 제공 여부와 별개입니다. [에뮬레이터 릴리즈](https://document.pleos.ai/docs/pleos-only/release-note/emulator-release-note)
 
 ## 확인된 범위
 
