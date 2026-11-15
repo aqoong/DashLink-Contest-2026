@@ -13,8 +13,8 @@ android {
         applicationId = "ai.pleos.contest.dashlink"
         minSdk = 28
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.3.8-mvp"
+        versionCode = 11
+        versionName = "0.3.9-mvp"
     }
 
     compileOptions {

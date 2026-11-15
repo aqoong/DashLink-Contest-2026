@@ -299,11 +299,156 @@ class SosPlaybackTest {
         }
     }
 
+    @Test fun repeatingSignalRestoresThenWaitsBeforeCheckingAndCapturingNextBatch() {
+        val h = Harness(listOf(MorsePulse(true, 100L)), repeatIntervalMs = 30_000L)
+        h.player.start()
+        h.captured(true)
+        h.writes.single().second(true, "ack")
+        h.next()
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(1, h.captureCount)
+        assertEquals(1, h.batchChecks)
+        h.restored(true)
+        assertTrue(h.player.busy)
+        assertTrue(h.finished.isEmpty())
+        assertEquals(30_000L, h.scheduled.single().first)
+        h.next()
+        assertEquals(2, h.batchChecks)
+        assertEquals(2, h.captureCount)
+        assertEquals(1, h.writes.size)
+        assertFalse(h.player.completedSignal)
+        assertEquals(MorseProgress(), h.progress.last())
+        h.captured(true)
+        assertEquals(2, h.writes.size)
+    }
+
+    @Test fun stopDuringRepeatPauseFinishesWithoutRestoringAgainOrAcceptingStaleTimer() {
+        val h = repeatingAfterBatch()
+        h.restored(true)
+        val staleTimer = h.scheduled.single().second
+        h.player.stop()
+        staleTimer()
+        h.player.stop()
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(listOf(true), h.finished)
+        assertEquals(1, h.restoreCount)
+        assertEquals(1, h.captureCount)
+        assertEquals(1, h.writes.size)
+    }
+
+    @Test fun stopWhileRestoringPreventsRepeatAfterSuccessfulRestore() {
+        val h = repeatingAfterBatch()
+        h.player.stop()
+        h.restored(true)
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(listOf(true), h.finished)
+        assertEquals(1, h.captureCount)
+    }
+
+    @Test fun failedRestoreNeverSchedulesRepeat() {
+        val h = repeatingAfterBatch()
+        h.restored(false)
+        h.restored(true)
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(listOf(false), h.finished)
+        assertEquals(1, h.captureCount)
+    }
+
+    @Test fun failedWriteNeverRepeatsEvenWhenRestorationSucceeds() {
+        val h = Harness(repeatIntervalMs = 30_000L)
+        h.player.start()
+        h.captured(true)
+        h.writes.single().second(false, "write failed")
+        h.restored(true)
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(listOf(true), h.finished)
+        assertFalse(h.player.completedSignal)
+        assertEquals(1, h.captureCount)
+    }
+
+    @Test fun failedRecheckAfterPauseFinishesWithoutCapturingOrWriting() {
+        val h = repeatingAfterBatch()
+        h.restored(true)
+        h.batchAllowed = false
+        h.next()
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(1, h.captureCount)
+        assertEquals(1, h.writes.size)
+        assertEquals(1, h.restoreCount)
+        assertEquals(listOf(false), h.finished)
+        assertFalse(h.player.completedSignal)
+    }
+
+    @Test fun initialRecheckFailureNeverCapturesLamp() {
+        val h = Harness(repeatIntervalMs = 30_000L)
+        h.batchAllowed = false
+        h.player.start()
+        assertEquals(0, h.captureCount)
+        assertTrue(h.writes.isEmpty())
+        assertFalse(h.player.busy)
+        assertEquals(listOf(false), h.finished)
+    }
+
+    @Test fun failedNextCaptureDoesNotRestartOrWriteAgain() {
+        val h = repeatingAfterBatch()
+        h.restored(true)
+        h.next()
+        h.captured(false)
+        assertFalse(h.player.busy)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(1, h.writes.size)
+        assertEquals(listOf(false), h.finished)
+    }
+
+    @Test fun staleRepeatTimerAndRestoreCannotAffectLaterBatch() {
+        val h = repeatingAfterBatch()
+        val oldRestore = h.restoreCallback!!
+        h.restored(true)
+        val oldPause = h.scheduled.single().second
+        h.next()
+        oldPause()
+        oldRestore(true, "late restore")
+        assertEquals(2, h.captureCount)
+        assertTrue(h.scheduled.isEmpty())
+        h.captured(true)
+        assertEquals(2, h.writes.size)
+        assertTrue(h.finished.isEmpty())
+    }
+
+    @Test fun repeatPauseSchedulingFailureFinishesWithoutAnotherRestore() {
+        val h = repeatingAfterBatch()
+        h.schedulingFails = true
+        h.restored(true)
+        assertFalse(h.player.busy)
+        assertFalse(h.player.completedSignal)
+        assertTrue(h.scheduled.isEmpty())
+        assertEquals(1, h.restoreCount)
+        assertEquals(listOf(false), h.finished)
+    }
+
+    private fun repeatingAfterBatch(): Harness = Harness(
+        listOf(MorsePulse(true, 100L)), repeatIntervalMs = 30_000L,
+    ).apply {
+        player.start()
+        captured(true)
+        writes.single().second(true, "ack")
+        next()
+    }
+
     private class Harness(
         pulses: List<MorsePulse> = MorseSos.sequence(),
         signalLabel: String = "SOS",
         failSchedule: Boolean = false,
+        repeatIntervalMs: Long? = null,
     ) {
+        var schedulingFails = failSchedule
+        var batchAllowed = true
+        var batchChecks = 0
         var captureCount = 0
         var restoreCount = 0
         var captureCallback: ((Boolean, String) -> Unit)? = null
@@ -316,7 +461,7 @@ class SosPlaybackTest {
         val progress = mutableListOf<MorseProgress>()
         val player = SosPlayback(
             schedule = { delay, action ->
-                if (failSchedule) error("scheduler failure")
+                if (schedulingFails) error("scheduler failure")
                 scheduled += delay to action
                 delays += delay
             },
@@ -329,6 +474,8 @@ class SosPlaybackTest {
             pulses = pulses,
             signalLabel = signalLabel,
             onProgress = { progress += it },
+            repeatIntervalMs = repeatIntervalMs,
+            canStartBatch = { batchChecks++; batchAllowed },
         )
 
         fun captured(ok: Boolean) = captureCallback!!(ok, "snapshot")

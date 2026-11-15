@@ -12,8 +12,10 @@ class SosPlayback(
     pulses: List<MorsePulse> = MorseSos.sequence(),
     private val signalLabel: String = "SOS",
     private val onProgress: (MorseProgress) -> Unit = {},
+    private val repeatIntervalMs: Long? = null,
+    private val canStartBatch: () -> Boolean = { true },
 ) {
-    private enum class Phase { IDLE, CAPTURE, WRITE, WAIT, RESTORE }
+    private enum class Phase { IDLE, CAPTURE, WRITE, WAIT, RESTORE, PAUSE }
 
     private val pulses = pulses.toList()
     private var phase = Phase.IDLE
@@ -23,22 +25,36 @@ class SosPlayback(
     private var progress = MorseProgress()
 
     val busy: Boolean get() = phase != Phase.IDLE
+    val waitingToRepeat: Boolean get() = phase == Phase.PAUSE
+    var batchNumber: Int = 0
+        private set
     var completedSignal: Boolean = false
         private set
 
     init {
         require(this.pulses.isNotEmpty() && this.pulses.first().on && this.pulses.last().on)
         require(this.pulses.all { it.durationMs > 0 } && this.pulses.zipWithNext().all { (a, b) -> a.on != b.on })
+        require(repeatIntervalMs == null || repeatIntervalMs > 0)
     }
 
     fun start() {
         if (busy) return
-        pulseIndex = 0
         stopping = false
+        batchNumber = 0
+        startBatch()
+    }
+
+    private fun startBatch() {
+        pulseIndex = 0
         completedSignal = false
         phase = Phase.CAPTURE
         progress = MorseProgress()
         onProgress(progress)
+        if (!runCatching { canStartBatch() }.getOrDefault(false)) {
+            finish(false, "조명 출력 조건이 바뀌어 중지됨")
+            return
+        }
+        batchNumber++
         onUpdate("원래 조명 상태 확인 중", null)
         request(capture) { ok, detail ->
             when {
@@ -50,12 +66,17 @@ class SosPlayback(
     }
 
     fun stop() {
-        if (!busy || phase == Phase.RESTORE) return
+        if (!busy) return
         stopping = true
-        if (phase == Phase.WAIT) {
-            restoreOriginal()
-        } else {
-            onUpdate("진행 중 조명 요청 응답 대기", null)
+        when (phase) {
+            Phase.PAUSE -> {
+                operation++
+                runCatching { cancelScheduled() }
+                finish(true, "반복 중지 · 원래 조명 복귀 확인")
+            }
+            Phase.RESTORE -> Unit
+            Phase.WAIT -> restoreOriginal()
+            else -> onUpdate("진행 중 조명 요청 응답 대기", null)
         }
     }
 
@@ -67,7 +88,7 @@ class SosPlayback(
         }
         val pulse = pulses[pulseIndex]
         phase = Phase.WRITE
-        onUpdate("$signalLabel 전송 중", pulse.on)
+        onUpdate(if (repeatIntervalMs != null) "$signalLabel ${batchNumber}회차 전송 중" else "$signalLabel 전송 중", pulse.on)
         if (stopping) {
             restoreOriginal()
             return
@@ -123,7 +144,29 @@ class SosPlayback(
         onProgress(progress)
         onUpdate("원래 조명 상태 복귀 요청 중", null)
         request(restore) { ok, detail ->
-            finish(ok, if (ok) "조명 복귀 요청 완료" else "조명 복귀 실패: $detail")
+            if (ok && completedSignal && !stopping && repeatIntervalMs != null) waitForRepeat(repeatIntervalMs)
+            else finish(ok, if (ok) "조명 복귀 요청 완료" else "조명 복귀 실패: $detail")
+        }
+    }
+
+    private fun waitForRepeat(delayMs: Long) {
+        phase = Phase.PAUSE
+        val expected = ++operation
+        onUpdate("${batchNumber}회차 완료 · 다음 SOS 대기", null)
+        if (stopping || phase != Phase.PAUSE) return
+        try {
+            schedule(delayMs) {
+                if (phase == Phase.PAUSE && expected == operation) {
+                    operation++
+                    startBatch()
+                }
+            }
+        } catch (e: Exception) {
+            if (phase == Phase.PAUSE && expected == operation) {
+                completedSignal = false
+                runCatching { cancelScheduled() }
+                finish(false, "$signalLabel 반복 예약 실패: ${e.message.orEmpty()}")
+            }
         }
     }
 

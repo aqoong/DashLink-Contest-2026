@@ -69,6 +69,7 @@ class MainActivity : Activity() {
     private var requestText: TextView? = null
     private var observedText: TextView? = null
     private var signalDetail = ""
+    private var nextSignalAt = 0L
     private var resultTitle = "재생 완료"
     private var outcome: DemoOutcome? = null
     private var scenario = DemoScenario.OFFLINE
@@ -91,6 +92,7 @@ class MainActivity : Activity() {
             incident.tick(SystemClock.elapsedRealtime())
             if (incident.phase == IncidentPhase.SIGNALING && before != IncidentPhase.SIGNALING) beginEmergency()
             countdown?.text = "${incident.secondsRemaining(SystemClock.elapsedRealtime())}"
+            if (player?.waitingToRepeat == true) updateSignalUi()
             main.postDelayed(this, 200)
         }
     }
@@ -504,17 +506,19 @@ class MainActivity : Activity() {
         }
         updateSignalUi()
     }
+    private fun outputBlockReason(includeBusy: Boolean = true): String? = when {
+        !visible || !uxAllowed || closing -> "정차 후 이용해 주세요"
+        (includeBusy && player?.busy == true) || recovering -> "현재 신호가 끝난 뒤 다시 눌러 주세요"
+        !emulator -> "이 버전은 Pleos 에뮬레이터에서만 시험해요"
+        sdkOutput && recoveryRequired -> "이전 조명 복귀를 먼저 확인해야 해요"
+        sdkOutput && checkSelfPermission(CONTROL_PERMISSION) != PackageManager.PERMISSION_GRANTED -> "조명 제어 권한이 필요해요"
+        sdkOutput && (vehicle == null || lamps.none { it.lamp == selectedLamp && it.writable }) -> "제어할 조명을 확인하지 못했어요"
+        sdkOutput && fog && selectedLamp == Lamp.HIGH_BEAM -> "안개 시나리오에서는 상향등을 사용하지 않아요"
+        else -> null
+    }
+
     private fun canOutput(): Boolean {
-        val reason = when {
-            !visible || !uxAllowed || closing -> "정차 후 이용해 주세요"
-            player?.busy == true || recovering -> "현재 신호가 끝난 뒤 다시 눌러 주세요"
-            !emulator -> "이 버전은 Pleos 에뮬레이터에서만 시험해요"
-            sdkOutput && recoveryRequired -> "이전 조명 복귀를 먼저 확인해야 해요"
-            sdkOutput && checkSelfPermission(CONTROL_PERMISSION) != PackageManager.PERMISSION_GRANTED -> "조명 제어 권한이 필요해요"
-            sdkOutput && (vehicle == null || lamps.none { it.lamp == selectedLamp && it.writable }) -> "제어할 조명을 확인하지 못했어요"
-            sdkOutput && fog && selectedLamp == Lamp.HIGH_BEAM -> "안개 시나리오에서는 상향등을 사용하지 않아요"
-            else -> null
-        }
+        val reason = outputBlockReason()
         if (reason != null) toast(reason)
         return reason == null
     }
@@ -553,7 +557,7 @@ class MainActivity : Activity() {
     private fun startSignal(chosenMessage: MorseMessage) {
         if (!canOutput()) return
         interruptedByStop = false
-        message = chosenMessage; signalDetail = "준비 중"; signalProgress = MorseProgress()
+        message = chosenMessage; signalDetail = "준비 중"; signalProgress = MorseProgress(); nextSignalAt = 0L
         if (chosenMessage == MorseMessage.SOS) { screen = Screen.SIGNAL; render() }
         else { inlineMessageShown = true; showInlineMessage() }
         val endpoint = vehicle
@@ -562,10 +566,26 @@ class MainActivity : Activity() {
         val playback = SosPlayback(
             schedule = { delay, task -> pulseHandler.postDelayed({ task() }, delay) },
             cancelScheduled = { pulseHandler.removeCallbacksAndMessages(null) },
-            capture = { done -> if (usingSdk && endpoint != null && lamp != null) endpoint.captureLamp(lamp, done) else done(true, "화면 미리보기") },
-            write = { on, done -> if (usingSdk && endpoint != null && lamp != null) endpoint.setLamp(lamp, on, done) else done(true, "화면 미리보기") },
-            restore = { done -> if (usingSdk && endpoint != null) endpoint.restoreLamp(done) else done(true, "화면 미리보기 종료") },
-            onUpdate = { detail, _ -> signalDetail = detail; updateSignalUi() },
+            capture = { done ->
+                if (!usingSdk) done(true, "화면 미리보기")
+                else if (endpoint != null && lamp != null) endpoint.captureLamp(lamp, done)
+                else done(false, "차량 연결 또는 조명 없음")
+            },
+            write = { on, done ->
+                if (!usingSdk) done(true, "화면 미리보기")
+                else if (endpoint != null && lamp != null) endpoint.setLamp(lamp, on, done)
+                else done(false, "차량 연결 또는 조명 없음")
+            },
+            restore = { done ->
+                if (!usingSdk) done(true, "화면 미리보기 종료")
+                else if (endpoint != null) endpoint.restoreLamp(done)
+                else done(false, "차량 연결 없음 · 조명 복구 필요")
+            },
+            onUpdate = { detail, _ ->
+                signalDetail = detail
+                nextSignalAt = if (player?.waitingToRepeat == true) SystemClock.elapsedRealtime() + SOS_REPEAT_INTERVAL_MS else 0L
+                updateSignalUi()
+            },
             onFinished = { restored ->
                 val complete = player?.completedSignal == true && !cancelled
                 val latchCleared = !usingSdk || !recoveryRequired
@@ -585,6 +605,11 @@ class MainActivity : Activity() {
             },
             pulses = MorseCode.sequence(chosenMessage), signalLabel = chosenMessage.wireText,
             onProgress = { signalProgress = it; updateSignalUi() },
+            repeatIntervalMs = if (chosenMessage == MorseMessage.SOS) SOS_REPEAT_INTERVAL_MS else null,
+            canStartBatch = {
+                !cancelled && outputBlockReason(includeBusy = false) == null &&
+                    usingSdk == sdkOutput && endpoint === vehicle && lamp == selectedLamp
+            },
         )
         player = playback
         playback.start()
@@ -598,7 +623,7 @@ class MainActivity : Activity() {
         ui.header.visibility = View.GONE
         ui.badge.visibility = View.GONE
         ui.content.setPadding(ui.content.paddingLeft, 0, ui.content.paddingRight, ui.dp(8))
-        ui.title(if (message == MorseMessage.SOS) "SOS · 3회" else if (message == MorseMessage.OK) "OK" else "${message.title} · ${message.wireText}")
+        ui.title(if (message == MorseMessage.SOS) "SOS 반복" else if (message == MorseMessage.OK) "OK" else "${message.title} · ${message.wireText}")
         signalView = MorseProgressView(this, message, if (message == MorseMessage.SOS) ui.danger else ui.blue, ui.muted).also {
             it.background = ui.shape(ui.surface, 20)
             ui.add(it)
@@ -613,7 +638,14 @@ class MainActivity : Activity() {
         if (!visible || screen !in listOf(Screen.SIGNAL, Screen.VEHICLE)) return
         signalView?.update(signalProgress)
         val total = MorseCode.sequence(message).count { it.on }
-        requestText?.text = "${if (sdkOutput) "SDK 요청" else "미리보기"} ${signalProgress.completedSymbols} / $total"
+        val progressText = "${if (sdkOutput) "SDK 요청" else "미리보기"} ${signalProgress.completedSymbols} / $total"
+        requestText?.text = if (message == MorseMessage.SOS) {
+            val detail = if (player?.waitingToRepeat == true) {
+                val seconds = ((nextSignalAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L) + 999L) / 1_000L
+                "${player?.batchNumber}회차 완료 · 다음 SOS까지 ${seconds}초"
+            } else signalDetail
+            "$detail\n$progressText"
+        } else progressText
         requestText?.visibility = if (interruptedByStop) View.GONE else View.VISIBLE
         observedText?.text = if (sdkOutput) "실제 조명 · ${selectedLamp?.let { lampStates[it] } ?: "미확인"}" else ""
         observedText?.visibility = if (sdkOutput && !interruptedByStop) View.VISIBLE else View.GONE
@@ -831,6 +863,7 @@ class MainActivity : Activity() {
     private fun saveSetting(action: () -> Unit) { try { action() } catch (_: Exception) { toast("정보를 저장하지 못했어요. 다시 시도해 주세요.") } }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     companion object {
+        private const val SOS_REPEAT_INTERVAL_MS = 30_000L
         private const val VEHICLE_REQUEST = 100
         private const val LOCATION_REQUEST = 101
         private const val CONTROL_REQUEST = 102
